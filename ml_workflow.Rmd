@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 it is used car price prediction, evaluation metric is rmse. the mean price of train is 43878.02. use mean price as single model , the kaggle public/private score is 78643/70105.
 
-## library & load_data
+## librar y & load_data
 
 ### library
 
