@@ -42,7 +42,7 @@ problems(tmp)
 data_path <- '../input/playground-series-s4e8/'
 train<- 
   read.csv(file.path(data_path, 'train.csv'))|>
-  slice_head(n=10**5)
+  slice_head(n=10**5) 
 #test <-  readr::read_csv(file.path(data_path, 'test.csv'))
 submission <-  readr::read_csv(file.path(data_path, 'sample_submission.csv'), 
                   col_types = list(col_double(), col_logical(), col_factor()))|>
