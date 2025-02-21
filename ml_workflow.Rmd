@@ -10,8 +10,14 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Target
+The goal of this competition is to predict whether a mushroom is edible or poisonous based on its physical characteristics.
 
-it is used car price prediction, evaluation metric is rmse. the mean price of train is 43878.02. use mean price as single model , the kaggle public/private score is 78643/70105.
+ML tools: 
+  tidymodels related worksflows & glm, lightgbm, ranger engine.
+Evaluatioin metric:
+  Matthews correlation coefficient (MCC). -1~1. 
+  sample_submission.csv : 0. it is totally random.
+  kaggle best 0.98, it is almost all right.
 
 ## librar y & load_data
 
@@ -45,7 +51,10 @@ library(lubridate)
 
 ```{r}
 data_path <- '../input/playground-series-s4e8/'
-train<- readr::read_csv(file.path(data_path, 'train.csv'),show_col_types = FALSE)
+train<- 
+  readr::read_csv(file.path(data_path, 'train.csv'),
+                  show_col_types = FALSE)|>
+  mutate(class=as.factor(class))
 test <- readr::read_csv(file.path(data_path, 'test.csv'),show_col_types = FALSE)
 submission <-  readr::read_csv(file.path(data_path, 'sample_submission.csv'),show_col_types = FALSE)
 ```
@@ -94,6 +103,7 @@ train|>get_df_var()
 
 ```{r}
 set.seed(1234)
+
 df_split <- initial_split(train|>head(10**5), prop = 0.8, strata = class)
  train_set <- training(df_split)
  test_set <- testing(df_split)
@@ -104,21 +114,20 @@ cv_folds <- vfold_cv(train_set,v = 5,strata=class)
 
 #### 4.1 v0 base_line
 ```{r}
-rcp_baseline <-
-  recipe(class ~ ., data = train_data) |>
+rcp_bs_v0 <-
+  recipe(class ~ ., data = train_set) |>
   update_role(id, new_role='ID')|>
-  step_mutate(class=as.factor(class),skip=T)|>
   step_impute_median(all_numeric_predictors())|> 
   step_log(all_numeric_predictors(),offset = 1, skip = FALSE) |>
   # process the logical feature to factor feature
   step_bin2factor(all_logical_predictors())|>
   # proceeding the convert the character feature to factorical feature
+  step_novel(all_nominal_predictors())|>
   step_unknown(all_nominal_predictors()) |>
-  step_dummy(all_nominal_predictors()) |>
+  step_dummy(all_nominal_predictors(),one_hot = TRUE) |>
   step_nzv(all_predictors())|>
   step_corr(all_numeric_predictors())|>
   step_normalize(all_numeric_predictors())|> # Scale numeric predictors
-  step_upsample(loan_status, over_ratio = 1)|>
   check_missing(all_predictors())
 
 ```
@@ -130,14 +139,9 @@ rcp_baseline <-
 set.seed(1234)
 library(future)
 library(furrr)
-selected_rcps <- list(#base=rcp_bs_v0,
-                      v1_engine=rcp_bs_v1,
-                      #v2_transmission=rcp_bs_v2,
-                      #v3_model = rcp_bs_v3,
-                      #v4_eng_trans=rcp_bs_v4,
-                      v5_engin_model= rcp_bs_v5)
+selected_rcps <- list(base=rcp_bs_v0)
 plan(multisession,workers = 5)
-selected_rcps|>future_map(\(rcp_item) rcp_item|>prep()|>bake(new_data=train)|>summary())
+selected_rcps|>map(\(rcp_item) rcp_item|>prep()|>bake(new_data=train)|>summary())
 plan(sequential)
 ```
 
@@ -325,5 +329,5 @@ Sys.sleep(15)
 system('kaggle competitions submissions -q -c playground-series-s4e8')
 
 # get leader board score
-#system('kaggle competitions leaderboard -s -v -c playground-series-s4e9')
+#system('kaggle competitions leaderboard -s -v -c playground-series-s4e8')
 ```
