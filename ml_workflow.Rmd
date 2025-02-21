@@ -140,14 +140,20 @@ set.seed(1234)
 library(future)
 library(furrr)
 selected_rcps <- list(base=rcp_bs_v0)
-plan(multisession,workers = 5)
-selected_rcps|>map(\(rcp_item) rcp_item|>prep()|>bake(new_data=train)|>summary())
-plan(sequential)
+#plan(multisession,workers = 5)
+#selected_rcps|>map(\(rcp_item) rcp_item|>prep()|>bake(new_data=train)|>summary())
+#plan(sequential)
 ```
 
 ### 5. Model Specification ----
 
 ```{r}
+glm_eng <- 
+  logistic_reg(penalty = 0.01,
+               mixture = 0.5) |>  # Example penalty and mixture values
+  set_engine("glmnet") |>
+  set_mode("classification")    # Specify classification
+
 lgbm_eng<-
    boost_tree(
      # trees = 500, # Number of trees
@@ -158,24 +164,25 @@ lgbm_eng<-
      # mtry = tune(),
      # min_n = tune()
    ) |>
-   set_mode("regression")|>
+   set_mode("classification")|>
    set_engine("lightgbm",
-              metric='rmse', 
+              metric='mcc', 
               # num_leaves = 30,
               num_threads = 4,
               verbose=1) 
 
-lm_eng<-
-   linear_reg() |>
-   set_mode("regression")|>
-   set_engine("lm") 
 
-selected_eng <- list(linear=lm_eng,
+
+selected_eng <- list(glm=glm_eng,
                      lgbm=lgbm_eng)
 
 ```
 
 ### 6. Workflow ----
+#### set metrics
+```{r}
+mcc_metrics <- metric_set(accuracy, mcc, bal_accuracy, precision, recall, f_meas)
+```
 
 #### simple wflow
 
@@ -183,22 +190,16 @@ selected_eng <- list(linear=lm_eng,
 set.seed(1234)
 simple_wf_fit <-
   workflow() |>
-  add_recipe(rcp_bs_v1) |>
-  add_model(lgbm_eng)|>
-  last_fit(df_split)
+  add_recipe(rcp_bs_v0) |>
+  add_model(glm_eng)|>
+  last_fit(df_split,
+           metrics=mcc_metrics)
 
 simple_wf_fit|>collect_metrics()
 # simple_wf_fit |>
 #   extract_fit_engine()|>
 #   plot()
 
-simple_wf_diag_df<- 
-  simple_wf_fit|>
-  collect_predictions()|>
-  mutate(.residual=price-.pred)|>
-  select(.row,.pred,.residual)|>
-  bind_cols(test_set)|>
-  relocate(all_of(c('price','.pred','.residual')),.after=1)
 ```
 
 #### simple workflowset
