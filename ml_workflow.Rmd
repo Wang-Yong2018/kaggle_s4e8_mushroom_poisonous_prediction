@@ -30,6 +30,7 @@ library(future)
 library(purrr)
 library(furrr)
 library(textrecipes)
+library(themis)
 
 library(bonsai)
 library(lightgbm)
@@ -76,15 +77,15 @@ submission |> skimr::skim()
 ### check if train & test is same distribution
 
 ```{r}
-get_df_var<-function(df){
-  df|>
-    summarize_all(var)|>
-    pivot_longer(cols=everything(),
-                 names_to='feature',
-                 values_to='variance')
-  
-}
-train|>get_df_var()
+# get_df_var<-function(df){
+#   df|>
+#     summarize_all(var)|>
+#     pivot_longer(cols=everything(),
+#                  names_to='feature',
+#                  values_to='variance')
+#   
+# }
+# train|>get_df_var()
 ```
 
 ## coding
@@ -104,7 +105,7 @@ train|>get_df_var()
 ```{r}
 set.seed(1234)
 
-df_split <- initial_split(train|>head(10**5), prop = 0.8, strata = class)
+df_split <- initial_split(train|>head(2*10**5), prop = 0.8, strata = class)
  train_set <- training(df_split)
  test_set <- testing(df_split)
 cv_folds <- vfold_cv(train_set,v = 5,strata=class)
@@ -112,7 +113,7 @@ cv_folds <- vfold_cv(train_set,v = 5,strata=class)
 
 ### 4. Preprocessing Recipe ----
 
-#### 4.1 v0 base_line
+#### 4.1 v0 base_line - mcc 0.55
 ```{r}
 rcp_bs_v0 <-
   recipe(class ~ ., data = train_set) |>
@@ -128,10 +129,32 @@ rcp_bs_v0 <-
   step_nzv(all_predictors())|>
   step_corr(all_numeric_predictors())|>
   step_normalize(all_numeric_predictors())|> # Scale numeric predictors
+  step_smote(class, over_ratio = 1.0) |>
   check_missing(all_predictors())
 
 ```
 
+
+#### 4.2 v1 bs_v1- numeric transfor by boxcox 0.54
+```{r}
+rcp_bs_v1 <-
+  recipe(class ~ ., data = train_set) |>
+  update_role(id, new_role='ID')|>
+  step_impute_median(all_numeric_predictors())|> 
+  step_BoxCox(all_numeric_predictors()) |>
+  # process the logical feature to factor feature
+  step_bin2factor(all_logical_predictors())|>
+  # proceeding the convert the character feature to factorical feature
+  step_novel(all_nominal_predictors())|>
+  step_unknown(all_nominal_predictors()) |>
+  step_dummy(all_nominal_predictors(),one_hot = TRUE) |>
+  step_nzv(all_predictors())|>
+  step_corr(all_numeric_predictors())|>
+  step_normalize(all_numeric_predictors())|> # Scale numeric predictors
+  step_smote(class, over_ratio = 1.0) |>
+  check_missing(all_predictors())
+
+```
 
 #### 4.10 all recipes
 
@@ -190,7 +213,7 @@ mcc_metrics <- metric_set(accuracy, mcc, bal_accuracy, precision, recall, f_meas
 set.seed(1234)
 simple_wf_fit <-
   workflow() |>
-  add_recipe(rcp_bs_v0) |>
+  add_recipe(rcp_bs_v1) |>
   add_model(glm_eng)|>
   last_fit(df_split,
            metrics=mcc_metrics)
@@ -324,10 +347,10 @@ final_predictions <- final_model |>
 
 ```{r}
 # submit latest submission.csv
-system('kaggle competitions submit -c playground-series-s4e8 -f submission.csv.zip -m "sample_submission"')
-Sys.sleep(15)
+#system('kaggle competitions submit -c playground-series-s4e8 -f submission.csv.zip -m "sample_submission"')
+#Sys.sleep(15)
 # get latest score 
-system('kaggle competitions submissions -q -c playground-series-s4e8')
+#system('kaggle competitions submissions -q -c playground-series-s4e8')
 
 # get leader board score
 #system('kaggle competitions leaderboard -s -v -c playground-series-s4e8')
