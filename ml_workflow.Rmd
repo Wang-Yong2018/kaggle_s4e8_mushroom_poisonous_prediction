@@ -36,9 +36,9 @@ library(bonsai)
 library(lightgbm)
 library(xgboost)
 library(ranger)
-library(ranger)
-library(readr)
 
+library(readr)
+library(janitor)
 library(lubridate)
 ```
 
@@ -55,8 +55,12 @@ data_path <- '../input/playground-series-s4e8/'
 train<- 
   readr::read_csv(file.path(data_path, 'train.csv'),
                   show_col_types = FALSE)|>
-  mutate(class=as.factor(class))
-test <- readr::read_csv(file.path(data_path, 'test.csv'),show_col_types = FALSE)
+  mutate(class=as.factor(class))|>
+  janitor::clean_names()
+test <- 
+  readr::read_csv(file.path(data_path, 'test.csv'),
+                  show_col_types = FALSE)|>
+  janitor::clean_names()
 submission <-  readr::read_csv(file.path(data_path, 'sample_submission.csv'),show_col_types = FALSE)
 ```
 
@@ -125,6 +129,7 @@ rcp_bs_v0 <-
   # proceeding the convert the character feature to factorical feature
   step_novel(all_nominal_predictors())|>
   step_unknown(all_nominal_predictors()) |>
+  step_other(all_nominal_predictors())|>
   step_dummy(all_nominal_predictors(),one_hot = TRUE) |>
   step_nzv(all_predictors())|>
   step_corr(all_numeric_predictors())|>
@@ -135,25 +140,33 @@ rcp_bs_v0 <-
 ```
 
 
-#### 4.2 v1 bs_v1- numeric transfor by boxcox 0.54
+#### 4.2 v1 bs_v1- step_other threshold change to 0.01
+- step_other use low filter
+- cap* diameter* stem-widht/height assuming  
 ```{r}
 rcp_bs_v1 <-
   recipe(class ~ ., data = train_set) |>
   update_role(id, new_role='ID')|>
   step_impute_median(all_numeric_predictors())|> 
-  step_BoxCox(all_numeric_predictors()) |>
+  # calculate stem volume & surface size. -- it is correlation with other variable so remove by step_corr
+  step_mutate(stem_volumn= pi*(stem_width/2)**2*stem_height,
+              stem_surface_size = stem_width* stem_height)|> 
+  step_log(all_numeric_predictors(),offset=1) |>
   # process the logical feature to factor feature
   step_bin2factor(all_logical_predictors())|>
   # proceeding the convert the character feature to factorical feature
   step_novel(all_nominal_predictors())|>
+  step_other(all_nominal_predictors(),threshold = 0.001)|>
   step_unknown(all_nominal_predictors()) |>
   step_dummy(all_nominal_predictors(),one_hot = TRUE) |>
   step_nzv(all_predictors())|>
-  step_corr(all_numeric_predictors())|>
+  step_corr(all_numeric_predictors(), threshold = 0.95)|>
   step_normalize(all_numeric_predictors())|> # Scale numeric predictors
   step_smote(class, over_ratio = 1.0) |>
   check_missing(all_predictors())
 
+tmp<- rcp_bs_v1|>prep()|>juice()
+tmp|>glimpse()
 ```
 
 #### 4.10 all recipes
@@ -162,10 +175,11 @@ rcp_bs_v1 <-
 set.seed(1234)
 library(future)
 library(furrr)
-selected_rcps <- list(base=rcp_bs_v0)
-#plan(multisession,workers = 5)
-#selected_rcps|>map(\(rcp_item) rcp_item|>prep()|>bake(new_data=train)|>summary())
-#plan(sequential)
+selected_rcps <- list(base=rcp_bs_v0,
+                      v1=rcp_bs_v1)
+plan(multisession,workers = 5)
+selected_rcps|>map(\(rcp_item) rcp_item|>prep()|>bake(new_data=train)|>summary())
+plan(sequential)
 ```
 
 ### 5. Model Specification ----
@@ -179,13 +193,13 @@ glm_eng <-
 
 lgbm_eng<-
    boost_tree(
-     # trees = 500, # Number of trees
-     # learn_rate = 0.1,
-     # loss_reduction = 0.001,
-     # sample_size = 0.85, # Added sample_size
-     # tree_depth = tune(),
-     # mtry = tune(),
-     # min_n = tune()
+      trees = 500, # Number of trees
+      learn_rate = 0.1,
+      loss_reduction = 0.001,
+      sample_size = 0.85, # Added sample_size
+      #tree_depth = tune(),
+      #mtry = tune(),
+      #min_n = tune()
    ) |>
    set_mode("classification")|>
    set_engine("lightgbm",
@@ -194,17 +208,28 @@ lgbm_eng<-
               num_threads = 4,
               verbose=1) 
 
+rf_eng<- rand_forest( trees = 500, 
+                      #mtry=tune(), 
+                      min_n=30) |>
+  set_engine("ranger",num.threads=4)|>
+  set_mode("classification") 
 
-
+xgb_eng<- boost_tree( trees = 500, 
+                      #mtry=tune(), 
+                      min_n=30) |>
+  set_engine("xgboost",num.threads=8)|>
+  set_mode("classification") 
 selected_eng <- list(glm=glm_eng,
-                     lgbm=lgbm_eng)
+                     rf=rf_eng,
+                     lgbm=lgbm_eng,
+                     xgb=xgb_eng)
 
 ```
 
 ### 6. Workflow ----
 #### set metrics
 ```{r}
-mcc_metrics <- metric_set(accuracy, mcc, bal_accuracy, precision, recall, f_meas)
+mcc_metrics <- metric_set(accuracy, mcc, bal_accuracy,roc_auc)
 ```
 
 #### simple wflow
@@ -214,7 +239,7 @@ set.seed(1234)
 simple_wf_fit <-
   workflow() |>
   add_recipe(rcp_bs_v1) |>
-  add_model(glm_eng)|>
+  add_model(xgb_eng)|>
   last_fit(df_split,
            metrics=mcc_metrics)
 
@@ -237,7 +262,7 @@ wfs_result <-
                models = selected_eng ) |>
   workflow_map(fn='fit_resamples',
                resamples =cv_folds,
-               metrics = metric_set(rmse, rsq),
+               metrics =mcc_metrics,
                control = ctrl
                )
 wfs_result|>collect_metrics()  
@@ -248,6 +273,9 @@ plan(sequential)
 ### 7 stacking
 
 ```{r}
+set.seed(1234)
+library(future)
+plan(multisession,workers = 12)
 combined_fit <-
   stacks::stacks()|>
   stacks::add_candidates(wfs_result)|>
@@ -258,6 +286,7 @@ combined_fit|>
   autoplot(type = "weights")
 
 autoplot(combined_fit)
+plan(sequential)
 ```
 
 ### 7. Tuning Grid ----
@@ -321,23 +350,27 @@ autoplot(combined_fit)
 combined_test_result <- 
   test_set %>%
   bind_cols(predict(combined_fit, .))
-combined_test_result|>rsq(price, .pred)
+combined_test_result|>mcc(class, .pred_class)
 ```
 
 ### 11. Prepare Submission ----
 
 ```{r}
+set.seed(1234)
+library(future)
+plan(multisession,workers = 12)
 final_model <- combined_fit#simple_wf_fit|>extract_workflow()
 final_predictions <- final_model |>
    predict(new_data = test) 
+plan(sequential)
 
- #Handle negative predictions
- final_predictions <- final_predictions |>
-   mutate(.pred= ifelse(.pred< 0, 0, .pred))
+ # #Handle negative predictions
+ # final_predictions <- final_predictions |>
+ #   mutate(.pred= ifelse(.pred< 0, 0, .pred))
 
  # Save submission file
  submission |>
-   #mutate(price=final_predictions$.pred)|>
+   mutate(class=final_predictions$.pred_class)|>
    readr::write_csv("submission.csv")
  zip('submission.csv.zip','submission.csv')
  
@@ -347,10 +380,10 @@ final_predictions <- final_model |>
 
 ```{r}
 # submit latest submission.csv
-#system('kaggle competitions submit -c playground-series-s4e8 -f submission.csv.zip -m "sample_submission"')
-#Sys.sleep(15)
+system('kaggle competitions submit -c playground-series-s4e8 -f submission.csv.zip -m "sample_submission"')
+Sys.sleep(15)
 # get latest score 
-#system('kaggle competitions submissions -q -c playground-series-s4e8')
+system('kaggle competitions submissions -q -c playground-series-s4e8')
 
 # get leader board score
 #system('kaggle competitions leaderboard -s -v -c playground-series-s4e8')
