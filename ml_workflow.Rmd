@@ -378,13 +378,20 @@ plan(sequential)
 
 ## kaggle submission
 
+### notebook convert
 ```{r}
-# submit latest submission.csv
-system('kaggle competitions submit -c playground-series-s4e8 -f submission.csv.zip -m "sample_submission"')
-Sys.sleep(15)
-# get latest score 
-system('kaggle competitions submissions -q -c playground-series-s4e8')
+library(rmd2jupyter)
+rmd2jupyter('ml_workflow.Rmd')
+```
 
-# get leader board score
-#system('kaggle competitions leaderboard -s -v -c playground-series-s4e8')
+### score submit
+```{r}
+# # submit latest submission.csv
+# system('kaggle competitions submit -c playground-series-s4e8 -f submission.csv.zip -m "sample_submission"')
+# Sys.sleep(15)
+# # get latest score 
+# system('kaggle competitions submissions -q -c playground-series-s4e8')
+# 
+# # get leader board score
+# #system('kaggle competitions leaderboard -s -v -c playground-series-s4e8')
 ```
